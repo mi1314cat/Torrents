@@ -5,6 +5,7 @@
 #   首次安装：  curl -fsSL https://raw.githubusercontent.com/mi1314cat/Torrents/main/deploy.sh | sudo bash
 #   已安装更新：sudo bash deploy.sh            （幂等：拉代码 → 装依赖 → 重启）
 #   自定义参数：sudo bash deploy.sh --dir /opt/torrent-tool --port 10011
+#               sudo bash deploy.sh --service torrent-tool-dev --port 10099
 #
 # 做的事：拉取代码 → 建 venv 装依赖 → 渲染 systemd 单元 → 启动 → 健康检查
 # 不做：改 nginx、改防火墙、生成证书（这些请自行决定）
@@ -23,6 +24,7 @@ while [[ $# -gt 0 ]]; do
     --dir)   INSTALL_DIR="$2"; shift 2 ;;
     --port)  PORT="$2"; shift 2 ;;
     --repo)  REPO_URL="$2"; shift 2 ;;
+    --service) SERVICE_NAME="$2"; shift 2 ;;
     --branch) BRANCH="$2"; shift 2 ;;
     -h|--help)
       sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
@@ -85,12 +87,28 @@ if [[ -d "$INSTALL_DIR/.git" ]]; then
   say "已更新到 origin/$BRANCH ($(git rev-parse --short HEAD))"
 else
   say "全新安装到 $INSTALL_DIR"
+  # git clone 要求目标目录为空；若残留文件，先明确报出来而不是含糊失败
+  if [[ -d "$INSTALL_DIR" ]] && [[ -n "$(ls -A "$INSTALL_DIR" 2>/dev/null)" ]]; then
+    die "目标目录 $INSTALL_DIR 已存在且非空，无法直接克隆。
+  里面残留的内容：
+$(ls -A "$INSTALL_DIR" | head -10 | sed 's/^/    /')
+  处理办法（二选一）：
+    1) 换一个空目录：--dir /opt/其它目录
+    2) 确认这些内容可丢弃后清空：rm -rf ${INSTALL_DIR:?}/* ${INSTALL_DIR:?}/.[!.]*  再重跑"
+  fi
   mkdir -p "$INSTALL_DIR"
   cd "$INSTALL_DIR"
-  # 浅克隆后只保留一份，减少磁盘占用
-  git clone --depth 1 --branch "$BRANCH" "$REPO_URL" . 2>/dev/null \
-    || die "克隆失败：$REPO_URL（分支 $BRANCH）。私有仓库请改用：
-  git clone https://<token>@github.com/mi1314cat/Torrents.git $INSTALL_DIR"
+  # 浅克隆，减少磁盘占用
+  ERR=$(mktemp)
+  if ! git clone --depth 1 --branch "$BRANCH" "$REPO_URL" . 2>"$ERR"; then
+    sed 's/^/    /' "$ERR" | head -6 >&2
+    rm -f "$ERR"
+    die "克隆失败：$REPO_URL（分支 $BRANCH）
+  私有仓库请用带令牌的地址：
+    git clone https://<token>@github.com/$(echo "$REPO_URL" | sed 's#.*github.com/##; s#\.git##') $INSTALL_DIR
+  已有代码只是想更新的话，直接在已有目录里跑本脚本即可（走更新分支）。"
+  fi
+  rm -f "$ERR"
 fi
 
 [[ -f server.py ]] || die "目录里没有 server.py，确认拉到了正确的仓库/分支"
@@ -109,9 +127,31 @@ say "依赖版本："
 
 # ---------- 4. systemd ----------
 UNIT="/etc/systemd/system/${SERVICE_NAME}.service"
+
+# 保护：如果已存在的单元指向「别的目录/端口」，说明这台机器上已经有一套在跑，
+# 直接覆盖会把它停掉。遇到这种情况必须让用户显式确认。
+if [[ -f "$UNIT" ]]; then
+  OLD_EXEC=$(grep -oP '(?<=^ExecStart=).*' "$UNIT" 2>/dev/null | head -1 || true)
+  NEW_EXEC="${INSTALL_DIR}/venv/bin/python ${INSTALL_DIR}/server.py ${PORT}"
+  if [[ -n "$OLD_EXEC" && "$OLD_EXEC" != "$NEW_EXEC" ]]; then
+    warn "已存在 ${SERVICE_NAME}.service，但它指向的是别处："
+    warn "    现有: $OLD_EXEC"
+    warn "    本次: $NEW_EXEC"
+    warn "直接覆盖会让现有服务停机。"
+    if [[ -t 0 ]] && [[ "${TT_OVERWRITE:-0}" != "1" ]]; then
+      read -r -p "确认要覆盖吗？输入 yes 继续，其它任意键退出: " ans
+      [[ "$ans" == "yes" ]] || die "已取消，未做任何改动"
+    else
+      die "非交互环境无法确认。确认无误可加环境变量 TT_OVERWRITE=1 重跑，或先 systemctl stop ${SERVICE_NAME} 并备份 $UNIT"
+    fi
+    [[ -f "${UNIT}.bak.$(date +%Y%m%d%H%M%S)" ]] || cp -a "$UNIT" "${UNIT}.bak.$(date +%Y%m%d%H%M%S)"
+    warn "原单元已备份为 ${UNIT}.bak.*"
+  fi
+fi
+
 say "写入 systemd 单元: $UNIT"
 sed -e "s#__INSTALL_DIR__#${INSTALL_DIR}#g" -e "s#__PORT__#${PORT}#g" \
-    "$INSTALL_DIR/deploy/${SERVICE_NAME}.service" > "$UNIT"
+    "$INSTALL_DIR/deploy/torrent-tool.service" > "$UNIT"
 systemctl daemon-reload
 systemctl enable "$SERVICE_NAME" >/dev/null 2>&1 || true
 systemctl restart "$SERVICE_NAME"
@@ -129,12 +169,20 @@ if [[ $READY -ne 1 ]]; then
   die "部署失败"
 fi
 
-# 端口是否真的只监听本机
-LISTEN=$(ss -tln 2>/dev/null | grep ":${PORT} " || true)
-if echo "$LISTEN" | grep -qE '0\.0\.0\.0:|\*:'; then
-  warn "端口 ${PORT} 监听在所有网卡上！检查 TT_LISTEN 是否被改成 0.0.0.0"
+# 端口是否真的只监听本机。
+# 注意：ss -H 输出中第 4 列是「本地地址」；最后一列 0.0.0.0:* 是对端(peer)列，
+# 整行 grep 会把它误判成「监听所有网卡」，所以这里只取本地地址列判断。
+if ! command -v ss >/dev/null 2>&1; then
+  warn "未找到 ss（iproute2），跳过监听地址检查。可自行确认：netstat -tlnp | grep ${PORT}"
 else
-  say "监听正常：仅本机 127.0.0.1:${PORT}"
+  LISTEN=$(ss -tlnH 2>/dev/null | awk -v pat=":${PORT}\$" '$4 ~ pat {print $4; exit}')
+  if [[ -z "$LISTEN" ]]; then
+    warn "ss 中没找到 :${PORT} 的监听记录（服务可能已退出，请看 journalctl -u ${SERVICE_NAME}）"
+  elif [[ "$LISTEN" == 127.0.0.1:* || "$LISTEN" == \[::1\]:* ]]; then
+    say "监听正常：仅本机 ${LISTEN}（未暴露公网）"
+  else
+    warn "端口 ${PORT} 监听在 ${LISTEN} 而非 127.0.0.1！确认 TT_LISTEN 没被改成 0.0.0.0"
+  fi
 fi
 
 # ---------- 6. 结果 ----------
