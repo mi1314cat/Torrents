@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Torrent 搜索与健康检测 · 私有</title>
+<style>
+:root{--bg:#121417;--fg:#e7e9ea;--dim:#9aa2a8;--card:#1c2024;--green:#39b36a;--red:#d05a5a;--yellow:#d9a441;--acc:#2f6fed}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.6 system-ui,"Microsoft YaHei",sans-serif}
+.wrap{max-width:1000px;margin:0 auto;padding:18px}
+h1{font-size:19px;margin:0 0 4px}.sub{color:var(--dim);font-size:12px;margin-bottom:14px}
+input,select{padding:9px 11px;border-radius:8px;border:1px solid #2c3237;background:#171b1f;color:var(--fg);font-size:13px}
+button{padding:8px 12px;border:0;border-radius:6px;background:#2a3238;color:var(--fg);cursor:pointer;font-size:13px}
+button.primary{background:var(--acc)}button.danger{background:#8f3a3a}button:disabled{opacity:.5;cursor:not-allowed}
+.status{font-size:12px;color:var(--dim);min-height:18px;margin-bottom:8px;white-space:pre-wrap}
+.item{background:var(--card);border-radius:10px;padding:11px 13px;margin-bottom:9px}
+.meta{color:var(--dim);font-size:12px;margin:3px 0 7px}.meta b{color:var(--fg)}
+.badge{display:inline-block;padding:1px 7px;border-radius:9px;font-size:11px;margin-right:5px;background:#24292e}
+.health{font-size:13px;font-weight:600}
+.detail{font-size:12px;background:#16191c;border-radius:8px;padding:8px 10px;margin-top:7px;color:var(--dim);white-space:pre-wrap}
+.actions{display:flex;gap:7px;flex-wrap:wrap}
+table{width:100%;border-collapse:collapse;font-size:13px}td,th{padding:6px 8px;border-bottom:1px solid #262b30;text-align:left}
+.card{background:var(--card);border-radius:10px;padding:14px;margin-bottom:12px}
+.card h2{font-size:16px;margin:0 0 10px}
+.flex{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+input[type=number]{width:70px}
+#loginview{max-width:340px;margin:9vh auto;text-align:center}
+#loginview input{width:100%;margin:6px 0}
+.err{color:var(--red);font-size:13px;min-height:18px}
+.tabs button.active{background:var(--acc)}
+#tabpane{display:none}.show{display:block!important}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div id="loginview">
+    <h1>Torrent 搜索与健康检测</h1>
+    <div class="sub">私人工具 · 登录使用 · 服务器不保存 Torrent 数据</div>
+  
+    <input id="lu" type="text" placeholder="用户名" autocomplete="username">
+    <input id="lp" type="password" placeholder="密码" autocomplete="current-password">
+    <div class="err" id="lerr"></div>
+    <button class="primary" style="width:100%" onclick="doLogin()">登录</button>
+  </div>
+
+  <div id="appview" style="display:none">
+    <div class="flex" style="justify-content:space-between">
+      <h1 style="margin:0">Torrent 搜索与健康检测</h1>
+      <div class="flex">
+        <span id="whoami" style="color:var(--dim);font-size:12px"></span>
+        <button onclick="doLogout()">退出</button>
+      </div>
+    </div>
+    <div class="sub">服务器侧可用性检测 ≠ 本机 qBittorrent 的实际下载速度</div>
+
+    <div class="tabs" id="admintabs" style="display:none">
+      <button data-pane="search" class="active" onclick="showPane('search',this)">搜索</button>
+      <button data-pane="sources" onclick="showPane('sources',this)">数据源</button>
+      <button data-pane="settings" onclick="showPane('settings',this)">设置</button>
+      <button data-pane="users" onclick="showPane('users',this)">用户</button>
+      <button data-pane="system" onclick="showPane('system',this)">系统</button>
+      <button data-pane="mcp" onclick="showPane('mcp',this)">MCP</button>
+    </div>
+
+    <div id="pane-search">
+      <div class="flex">
+        <input id="q" type="text" style="flex:1" placeholder="关键词，例如：Ubuntu 24.04 / 甄嬛传 / Some Show S02 1080p" autofocus>
+        <select id="precision">
+          <option value="strict">严格</option><option value="balanced" selected>标准</option><option value="broad">宽松</option>
+        </select>
+        <button class="primary" id="gobtn" onclick="doSearch()">搜索</button>
+      </div>
+      <div class="status" id="status"></div>
+      <div id="results"></div>
+    </div>
+
+    <div id="pane-sources" class="tabpane">
+      <div class="card">
+        <h2>数据源</h2>
+        <table><thead><tr><th>Source</th><th>状态</th><th>优先级</th><th>超时</th><th>成功/失败</th><th>平均延迟</th><th>最近成功</th><th>操作</th></tr></thead><tbody id="srcbody"></tbody></table>
+      </div>
+    </div>
+
+    <div id="pane-settings" class="tabpane">
+      <div class="card"><h2>搜索设置（保存后立即生效）</h2>
+        <div id="setform" style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px"></div>
+        <div style="margin-top:10px"><button class="primary" onclick="saveSettings()">保存设置</button></div>
+      </div>
+    </div>
+
+    <div id="pane-users" class="tabpane">
+      <div class="card">
+        <h2>用户</h2>
+        <table><thead><tr><th>用户名</th><th>角色</th><th>状态</th><th>创建</th><th>最近登录</th><th>操作</th></tr></thead><tbody id="usertbl"></tbody></table>
+        <div class="flex" style="margin-top:10px">
+          <input id="nu" placeholder="新用户名" style="width:140px">
+          <input id="np" type="password" placeholder="初始密码（≥8 位）" style="width:170px">
+          <select id="nr"><option value="user">user</option><option value="admin">admin</option></select>
+          <button onclick="createUser()">创建</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="pane-mcp" class="tabpane">
+      <div class="card"><h2>MCP Token 管理</h2>
+        <div class="flex" style="margin-bottom:10px">
+          <input id="mcpname" placeholder="Token 名称，例如 DSH" style="width:160px">
+          <input id="mcpdays" type="number" placeholder="过期天数（留空=永不过期）" style="width:180px">
+          <button onclick="createMcpToken()">创建</button>
+        </div>
+        <div id="mcptokennew" class="detail" style="display:none"></div>
+        <table><thead><tr><th>名称</th><th>状态</th><th>创建时间</th><th>最近使用</th><th>过期</th><th>操作</th></tr></thead><tbody id="mcpbody"></tbody></table>
+        <div style="margin-top:8px;font-size:12px;color:var(--dim)">Endpoint：POST /mcp（Streamable HTTP）；Authorization: Bearer &lt;token&gt;。Token 明文仅创建时显示一次，数据库只存 sha256。</div>
+      </div>
+    </div>
+    <div id="pane-system" class="tabpane">
+      <div class="card"><h2>系统信息</h2><pre id="sysinfo" style="font-size:12px;color:var(--dim);white-space:pre-wrap"></pre>
+        <button onclick="loadLogs()">查看/刷新日志</button>
+        <pre id="logbox" style="display:none;max-height:300px;overflow:auto;font-size:12px;color:var(--dim);white-space:pre-wrap"></pre>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+window.onerror=function(){};  // 覆盖 alert 类弹窗，禁用调试弹窗
+let ME=null, ADMIN=false;
+const $=id=>document.getElementById(id);
+async function apiFetch(url,opts={},ms=15000){
+  const ctl=new AbortController();setTimeout(()=>ctl.abort(),ms);
+  opts.credentials="same-origin";opts.signal=ctl.signal;
+  opts.headers=Object.assign({"X-Requested-With":"fetch"},opts.headers||{});
+  return fetch(url,opts);
+}
+async function ensureMe(){try{const r=await apiFetch("/api/me");if(r.ok){ME=await r.json();return true;}}catch(e){}return false;}
+function switchApp(on){$("loginview").style.display=on?"none":"";$("appview").style.display=on?"":"none";}
+async function doLogin(){
+  window.__ttdbg=window.__ttdbg||[];
+  window.__ttdbg.push("doLogin start");
+  try{
+  $("lerr").textContent="";
+  const r=await apiFetch("/login",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({username:$("lu").value.trim(),password:$("lp").value})});
+  if(!r.ok){let d={};try{d=await r.json()}catch(_){}
+    $("lerr").textContent=((d&&d.detail)||"")||("登录失败 "+r.status);window.__ttdbg.push("status "+r.status);return;}
+  ME=await r.json();ADMIN=(ME.role==="admin");
+  $("whoami").textContent=ME.username+"（"+ME.role+"）";
+  $("admintabs").style.display=ADMIN?"flex":"none";
+  $("lp").value="";switchApp(true);
+  }catch(e){$("lerr").textContent="doLogin 异常: "+e.message;window.__ttdbg.push("err "+e.message);}
+}
+function showPane(p,btn){
+  document.querySelectorAll(".tabpane,#pane-search").forEach(x=>x.style.display="none");
+  document.querySelectorAll(".tabs button").forEach(b=>b.classList.remove("active"));
+  btn.classList.add("active");
+  $("pane-"+p).style.display="block";
+  if(p==="sources")loadSources();
+  if(p==="settings")loadSettings();
+  if(p==="users")loadUsers();
+  if(p==="system")loadSystem();if(p==="mcp")loadMcpTokens();
+}
+async function doSearch(){
+  const q=$("q").value.trim();if(!q)return;
+  $("status").textContent="搜索中…";const a=$("gobtn");a.disabled=true;
+  try{
+    const r=await apiFetch("/api/search?q="+encodeURIComponent(q)+"&precision="+$("precision").value);
+    if(r.status===401){switchApp(false);return;}
+    if(!r.ok){$("status").textContent="搜索失败 "+r.status+(r.status===429?"（请求过于频繁）":"");return;}
+    const d=await r.json();
+    let msg=d.count+" 条 · "+(d.elapsed||"—")+"s"+(d.cached?"（缓存）":"");
+    msg+="\n"+d.sources_status.map(s=>`${s.name}${s.ok?"🟢":"🔴"}(${s.count??0}, ${s.latency??"—"}ms${s.error?" err: "+s.error:""})`).join("   ");
+    if(d.skipped)msg+="\n"+d.skipped;
+    $("status").textContent=msg;render(d.results);
+  }finally{a.disabled=false;}
+}
+function fmtSize(n){if(n==null)return "—";const u=["B","KB","MB","GB","TB"];let i=0,f=n;while(f>=1024&&i<4){f/=1024;i++}return f.toFixed(f<10&&i>0?1:0)+" "+u[i];}
+function fmtTime(p){if(!p)return "—";if(/^\d+$/.test(p)){const d=new Date(+p*1000);return d.toLocaleString("zh-CN");}return p.replace("T"," ");}
+function render(rows){
+  const box=$("results");box.innerHTML="";
+  rows.forEach((v,i)=>{
+    const seeds=v.sources.map(s=>`${s.name}=${s.seeders??"—"}`).join(" · ");
+    const sb=v.score_breakdown?Object.entries(v.score_breakdown).filter(([,x])=>x>0.002)
+      .map(([k,x])=>k+":"+(x*100).toFixed(1)+"%").join(" "):"";
+    const el=document.createElement("div");el.className="item";
+    el.innerHTML=`
+      <div style="font-weight:600">${i+1}. ${v.title||"(无标题)"}</div>
+      <div class="meta">
+        大小 <b>${fmtSize(v.size)}</b> · Seed <b>${seeds}</b>（<span style="color:var(--yellow)">API 数据</span>）·
+        文件 <b>${v.files!=null?v.files:"—"}</b> · 发布 <b>${fmtTime(v.published_at)}</b> ·
+        哈希 <b>${v.info_hash.slice(0,16)}…</b>
+        ${v.sources.map(s=>`<span class="badge">${s.name}</span>`).join("")}
+        ${sb?`<span class="badge">score: ${sb}</span>`:""}
+      </div>
+      <div class="health" data-h="${v.info_hash}">⚪ 未检测</div>
+      <div class="actions">
+        <button onclick="copyMagnet(this,'${v.magnet}')">复制 Magnet</button>
+        <button onclick="runL1('${v.info_hash}', this)">实时检测</button>
+        <button onclick="runL2('${v.info_hash}', this)">深度检测</button>
+      </div>
+      <div class="detail" id="d-${v.info_hash}"></div>`;
+    box.appendChild(el);
+  });
+}
+function setHealth(hash,text,cls){const e=document.querySelector(`[data-h="${hash}"]`);if(e){e.textContent=text;e.style.color=cls||"var(--dim)";}}
+function detail(hash,text){const d=document.getElementById("d-"+hash);if(d)d.textContent=text;}
+function copyMagnet(btn,m){navigator.clipboard.writeText(m).then(()=>{const o=btn.textContent;btn.textContent="已复制 ✓";setTimeout(()=>btn.textContent=o,1500);});}
+async function runL1(hash,btn){
+  setHealth(hash,"检测中…");btn.disabled=true;
+  const r=await apiFetch(`/api/l1?hash=${hash}`);btn.disabled=false;
+  if(!r.ok){setHealth(hash,"检测失败 "+r.status,r.status===429?"var(--yellow)":"var(--red)");return;}
+  const d=await r.json();
+  const cls=d.status.includes("🟢")?"var(--green)":d.status.includes("🔴")?"var(--red)":"var(--yellow)";
+  setHealth(hash,d.status+"　"+d.explain,cls);
+  const tt=d.trackers_tried.map(t=>`${t.tracker.replace("udp://","").split("/")[0]} → ${t.responded?(t.seeders!=null?"seed="+t.seeders+",leech="+t.leechers:"无数据"):"无响应"}`).join("\n");
+  detail(hash,`[L1 实时检测 · ${d.detection_time}]\n${tt}\n${d.note}`);
+}
+const l2busy={};
+async function runL2(hash,btn){
+  if(l2busy[hash]){alert("正在检测，请稍候");return;}
+  l2busy[hash]=1;setHealth(hash,"深度检测中…（约 60 秒）");btn.disabled=true;
+  const r=await apiFetch(`/api/l2?hash=${hash}`,{},100000);btn.disabled=false;delete l2busy[hash];
+  if(!r.ok){setHealth(hash,r.status===429?"⏳ 正在检测，请稍候（全局仅 1 个深度任务）":"检测失败 "+r.status,"var(--red)");return;}
+  const d=await r.json();
+  if(d.error){setHealth(hash,"🔴 深度检测失败："+d.error,"var(--red)");return;}
+  const good=d.num_peers>0||d.connect_candidates>0||d.metadata;
+  setHealth(hash,good?"🟢 服务器环境发现可用 peers":"🟡 60s 内未见可连接 peers（以本地 qBittorrent 实测为准）",good?"var(--green)":"var(--yellow)");
+  detail(hash,`[L2 深度检测 · ${d.detection_time}]
+DHT 节点：${d.dht_nodes} · 发现 peers：${d.peers_seen}（连接中 ${d.num_peers}，seeds ${d.num_seeds}）
+可连接候选：${d.connect_candidates} · 元数据：${d.metadata?("已获取（"+d.metadata_files+" 文件）"):"60s 内未取得（不代表无效）"}
+${d.note}`);
+}
+$("q").addEventListener("keydown",e=>{if(e.key==="Enter")doSearch();});
+
+const SET_FIELDS=[["precision","搜索精度"],["max_results","最大返回数"],["source_concurrency","源并发"],["l1_concurrency","L1 并发"],["l2_concurrency","L2 并发"],["l2_timeout","L2 超时秒"],["l1_trackers","L1 tracker 数"],["ttl_search","搜索缓存 TTL"],["ttl_l1","L1 缓存 TTL"],["ttl_l2","L2 缓存 TTL"],["session_ttl","会话 TTL 秒"],["cookie_secure","Secure Cookie"],["w_relevance","相关度权重"],["w_seed","种子权重"],["w_fresh","新鲜度权重"],["w_source_quality","来源权重"],["w_size","大小权重"],["w_health","健康证据权重"]];
+async function loadSources(){
+  const r=await apiFetch("/api/admin/sources");if(!r.ok)return;
+  const rows=await r.json();const tb=$("srcbody");tb.innerHTML="";
+  rows.forEach(s=>{
+    const tr=document.createElement("tr");tr.innerHTML=`
+      <td>${s.name}</td><td>${s.enabled?"🟢":"⚪"}</td>
+      <td><input type="number" value="${s.priority}" data-f="priority"></td>
+      <td><input type="number" value="${s.timeout}" step="0.5" data-f="timeout"></td>
+      <td>${s.success_count}/${s.fail_count}</td><td>${s.avg_latency??"—"}</td>
+      <td>${s.last_success??"—"}${s.last_error?" <span style='color:var(--red)'>"+s.last_error+"</span>":""}</td>
+      <td>
+        <button onclick="toggleSrc('${s.name}')">${s.enabled?"禁用":"启用"}</button>
+        <button onclick="testSrc('${s.name}')">测试</button>
+        <button onclick="saveSrc(this.parentElement.parentElement,'${s.name}')">保存</button>
+      </td>`;
+    tb.appendChild(tr);
+  });
+}
+async function toggleSrc(n){await apiFetch(`/api/admin/sources/${n}/toggle`,{method:"POST"});loadSources();}
+async function testSrc(n){const r=await apiFetch(`/api/admin/sources/${n}/test`,{method:"POST"},30000);const d=await r.json();
+  alert(n+" → "+(d.status?"🟢":"🔴")+" "+(d.result_count??0)+" 条 "+(d.latency??"—")+"ms"+(d.error?" err:"+d.error:""));loadSources();}
+async function saveSrc(tr,name){
+  const field=tr.querySelector('input[data-f="priority"]').value;
+  const timeout=tr.querySelector('input[data-f="timeout"]').value;
+  await apiFetch(`/api/admin/sources/${name}/set?field=priority&value=${field}`,{method:"POST"});
+  await apiFetch(`/api/admin/sources/${name}/set?field=timeout&value=${timeout}`,{method:"POST"});
+  loadSources();
+}
+async function loadSettings(){
+  const r=await apiFetch("/api/admin/settings");if(!r.ok)return;const s=await r.json();
+  const f=$("setform");f.innerHTML="";
+  SET_FIELDS.forEach(([key,label])=>{
+    const w=document.createElement("div");
+    w.innerHTML=`<div style="font-size:11px;color:var(--dim)">${label}</div><input data-k="${key}" value="${s[key]??""}" style="width:100%">`;
+    f.appendChild(w);
+  });
+}
+async function saveSettings(){
+  const body={};
+  document.querySelectorAll("#setform input").forEach(i=>{body[i.dataset.k]=i.value.replace(/[^\x20-\x7E]/g,(c,i,s)=>i==0?c:c)||"0";});
+  const r=await apiFetch("/api/admin/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+  if(!r.ok){const d=await r.json().catch(()=>({}));alert(d.detail||"保存失败");return;}
+  alert("已保存并立即生效");
+}
+async function loadUsers(){
+  const r=await apiFetch("/api/admin/users");if(!r.ok)return;
+  const rows=await r.json();const tb=$("usertbl");tb.innerHTML="";
+  rows.forEach(u=>{
+    const tr=document.createElement("tr");tr.innerHTML=`
+      <td>${u.username}</td><td>${u.role}</td><td>${u.enabled?"✅":"🚫"}</td><td>${u.created??"—"}</td><td>${u.last_login??"—"}</td>
+      <td>
+        <button onclick="userAct('${u.username}','${u.enabled?"disable":"enable"}')">${u.enabled?"禁用":"启用"}</button>
+        <button onclick="userReset('${u.username}')">重置密码</button>
+        ${u.role!=="admin"?`<button onclick="userDel('${u.username}')">删除</button>`:""}
+      </td>`;
+    tb.appendChild(tr);
+  });
+}
+async function createUser(){
+  const r=await apiFetch("/api/admin/users",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({username:$("nu").value.trim(),password:$("np").value,role:$("nr").value})});
+  if(!r.ok){const d=await r.json().catch(()=>({}));alert(d.detail||"创建失败");return;}
+  $("nu").value="";$("np").value="";loadUsers();
+}
+async function userAct(name,act,pw){
+  const r=await apiFetch(`/api/admin/users/${name}/action`,{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({action:act,password:pw})});
+  if(!r.ok){const d=await r.json().catch(()=>({}));alert(d.detail||"失败");}
+  loadUsers();
+}
+async function userDel(n){if(confirm("删除 "+n+"？"))userAct(n,"delete");}
+async function userReset(n){const pw=prompt("为 "+n+" 设置新密码（≥8 位）");if(pw)userAct(n,"reset_password",pw);}
+async function loadMcpTokens(){
+  const r=await apiFetch("/api/admin/mcp_tokens");if(!r.ok)return;
+  const rows=await r.json();const tb=$("mcpbody");tb.innerHTML="";
+  rows.forEach(t=>{
+    const tr=document.createElement("tr");tr.innerHTML=`
+      <td>${t.name}</td><td>${t.enabled?"✅":"🚫"}</td><td>${t.created??"—"}</td>
+      <td style="font-size:12px;color:var(--dim)">${t.last_used??"—"}</td><td>${t.expires??"—"}</td>
+      <td>
+        <button onclick="mcpAct('${t.name}','${t.enabled?"disable":"enable"}')">${t.enabled?"禁用":"启用"}</button>
+        <button onclick="mcpAct('${t.name}','delete')">删除</button>
+      </td>`;
+    tb.appendChild(tr);
+  });
+}
+async function createMcpToken(){
+  const name=$("mcpname").value.trim(); if(!name){alert("请输入名称");return;}
+  const days=$("mcpdays").value;
+  const body={name:name};
+  if(days) body.ttl_days=parseInt(days);
+  const r=await apiFetch("/api/admin/mcp_tokens",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+  if(!r.ok){const d=await r.json().catch(()=>({}));alert(d.detail||"创建失败");return;}
+  const d=await r.json();
+  const box=$("mcptokennew"); box.style.display="block";
+  box.textContent="名称："+d.name+"\nToken（仅本次显示）：\n"+d.token+"\n\n请立即复制保存；数据库只存不可逆哈希，无法再次查看。";
+  loadMcpTokens();
+}
+async function mcpAct(name,act){
+  if(act==="delete" && !confirm("删除 "+name+"？使用中的 MCP 客户端会立即失效。"))return;
+  await apiFetch(`/api/admin/mcp_tokens/${name}/action`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:act})});
+  loadMcpTokens();
+}
+async function loadSystem(){
+  const r=await apiFetch("/api/admin/system");if(!r.ok)return;
+  $("sysinfo").textContent=JSON.stringify(await r.json(),null,1);
+}
+async function loadLogs(){
+  const r=await apiFetch("/api/admin/logs");if(!r.ok)return;
+  const rows=await r.json();const b=$("logbox");b.style.display="block";
+  b.textContent=rows.map(r=>`[${r.at}] ${r.event} ${r.detail||""}`).join("\n");
+}
+(async()=>{
+  document.title="JS-OK typeof doLogin="+(typeof doLogin);
+  if(await ensureMe()){
+    ADMIN=(ME.role==="admin");
+    $("whoami").textContent=ME.username+"（"+ME.role+"）";
+    $("admintabs").style.display=ADMIN?"flex":"none";
+  }else switchApp(false);
+})();
+</script>
+</body>
+</html>

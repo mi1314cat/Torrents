@@ -1,0 +1,8 @@
+# 已在 Debian 13 / Python 3.13.5 上实测通过的版本组合
+# 改动前请先在测试机验证；fastmcp 与 fastapi/starlette 存在版本耦合，一起升级。
+fastapi==0.141.1
+starlette==1.6.0
+uvicorn[standard]==0.53.0
+fastmcp==4.0.3
+pydantic==2.13.5
+libtorrent==2.1.1

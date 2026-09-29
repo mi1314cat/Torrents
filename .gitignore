@@ -1,0 +1,29 @@
+# ---- 运行时数据（含用户密码 hash / MCP token hash，绝不入库）----
+torrent.db
+torrent.db-wal
+torrent.db-shm
+*.db
+*.db-journal
+
+# ---- 本地配置（可能含明文密码）----
+config.json
+.env
+.env.*
+
+# ---- Python ----
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# ---- 系统 / 编辑器 ----
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# ---- 临时文件 ----
+*.log
+*.tmp

@@ -1,0 +1,36 @@
+{
+  "_说明": "示例配置。真实配置文件名 config.json（已 .gitignore，绝不要提交）。注意：当前版本的运行时设置以 torrent.db 的 search_settings 表为准，本文件仅作参数参考与备份模板。",
+  "http_timeout": 10,
+  "max_results": 50,
+  "sources": {
+    "apibay": true,
+    "solidtorrents": true,
+    "nyaa": true,
+    "torrentscsv": true,
+    "therarbg": true,
+    "yts": true,
+    "dmhy": true,
+    "tokyotosho": true
+  },
+  "ttl_search": 600,
+  "ttl_l1": 300,
+  "ttl_l2": 900,
+  "l1_trackers": 6,
+  "l1_timeout": 5,
+  "l1_max_concurrency": 2,
+  "l2_timeout": 90,
+  "tracker_refresh": 28800,
+  "rate_limit": {
+    "search_capacity": 30, "search_refill": 0.5,
+    "l1_capacity": 12, "l1_refill": 0.2,
+    "l2_capacity": 6, "l2_refill": 0.05
+  },
+  "fallback_trackers": [
+    "udp://tracker.opentrackr.org:1337/announce",
+    "udp://open.demonii.com:1337/announce",
+    "udp://open.stealth.si:80/announce",
+    "udp://tracker.torrent.eu.org:451/announce",
+    "udp://exodus.desync.com:6969/announce",
+    "udp://explodie.org:6969/announce"
+  ]
+}

@@ -1,0 +1,33 @@
+# ============================================================
+# torrent-tool systemd unit —— 模板文件
+# __INSTALL_DIR__ 会被 deploy.sh 替换为实际安装目录
+# __PORT__         会被 deploy.sh 替换为实际监听端口（默认 10011）
+# 手工安装示例：
+#   sed -e "s#__INSTALL_DIR__#/opt/torrent-tool#g" -e "s#__PORT__#10011#g" \
+#       deploy/torrent-tool.service | sudo tee /etc/systemd/system/torrent-tool.service
+# ============================================================
+[Unit]
+Description=Torrent Tool (private torrent search + availability + MCP)
+Documentation=https://github.com/mi1314cat/Torrents
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=__INSTALL_DIR__
+ExecStart=__INSTALL_DIR__/venv/bin/python __INSTALL_DIR__/server.py __PORT__
+
+# 只监听本机，公网流量必须经反代进来（不要改成 0.0.0.0）
+Environment=TT_LISTEN=127.0.0.1
+# PYTHONUNBUFFERED=1 让 journalctl 能实时看到日志
+Environment=PYTHONUNBUFFERED=1
+
+Restart=on-failure
+RestartSec=3
+
+# 资源保护：防止 libtorrent 子进程把整机拖垮
+MemoryMax=400M
+Nice=5
+
+[Install]
+WantedBy=multi-user.target
